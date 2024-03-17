@@ -1,1 +1,8 @@
 .ipynb_checkpoints/
+.idea/
+__pycache__/
+*.iml
+launch.json
+disaster-tweets/test_enriched.csv
+disaster-tweets/train_enriched.csv
+disaster-tweets/*submission.csv
