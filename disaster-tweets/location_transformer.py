@@ -156,7 +156,7 @@ class LocationTransformer(BaseEstimator, TransformerMixin):
 
 def test1():
     t = LocationTransformer()
-    df = pd.read_csv('./disaster-tweets/test.csv', index_col='id')
+    df = pd.read_csv('./disaster-tweets/test.csv', index_col='id').sample(n=100)
     print('Shape before', df.shape)
     print(df.sample(n=5))
     df_out = t.fit_transform(df['location'])
