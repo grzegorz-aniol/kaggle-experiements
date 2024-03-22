@@ -9,12 +9,14 @@ import re
 
 class TextStatsTransformer(BaseEstimator, TransformerMixin):
 
-    def __init__(self, url_stats_file='url_stats.csv'):
-        self.url_stats_file=url_stats_file
+    def __init__(self, url_stats_file='url_stats.csv', hashtags_sentiment_file='hashtags_sentiment.csv'):
+        self.url_stats_file = url_stats_file
+        self.hashtags_sentiment_file = hashtags_sentiment_file
         self.__PUNCTUATION = set(string.punctuation)
         self.__STOP_WORDS = set(nltk.corpus.stopwords.words('english'))
         self.__LEMM = nltk.WordNetLemmatizer()
         self.__features_out = []
+        self.__hashtag_pattern = re.compile('#\w+')
         pass
 
     def fit(self, X, y=None):
@@ -33,9 +35,13 @@ class TextStatsTransformer(BaseEstimator, TransformerMixin):
         v_clean_tokens_factor = list()
         v_url_domains = list()
         v_url_redirects = list()
+        v_hashtags_sentiment = list()
 
         # load URL statistics
         df_url_stats = pd.read_csv(self.url_stats_file, index_col='url')
+
+        # load hashtags statistics
+        df_hashtags = pd.read_csv(self.hashtags_sentiment_file, index_col='hashtag')
 
         for _, row in X.iterrows():
             text = row['text']
@@ -64,7 +70,19 @@ class TextStatsTransformer(BaseEstimator, TransformerMixin):
                     redirects = int(url_info_row['url_redirects'])
                     domains.append(domain)
                     url_redirects_count += redirects
-            domains_text = ' '.join(domains)            
+            domains_text = ' '.join(domains)    
+
+            hashtags = self.extract_hashtags(text)        
+            values = []
+            weights = []
+            for h in hashtags:
+                if h in df_hashtags.index:
+                    counts = df_hashtags.loc[h]['all_count']
+                    sentiment = df_hashtags.loc[h]['sentiment']
+                    values.append(sentiment)
+                    weights.append(counts)
+            sentiment = np.average(values, weights=weights) if len(values) > 0 else .0
+            v_hashtags_sentiment.append(sentiment)
 
             v_clean_text.append(clean_text)
             v_text_length.append(text_length)
@@ -92,6 +110,7 @@ class TextStatsTransformer(BaseEstimator, TransformerMixin):
         X_transformed['clean_tokens_factor'] = v_clean_tokens_factor
         X_transformed['url_domains'] = v_url_domains
         X_transformed['url_redirects_count'] = v_url_redirects
+        X_transformed['hashtags_sentiment'] = v_hashtags_sentiment
 
         self.__features_out = X_transformed.columns
 
@@ -108,18 +127,31 @@ class TextStatsTransformer(BaseEstimator, TransformerMixin):
 
     def is_not_url(self, token):
         return not vld.url(token)
+    
+    def is_not_annotation(self, token):
+        return (len(token) == 0) or (token[0] != '@')
 
     def remove_punctuation(self, input):
         return ''.join([c for c in input if c not in self.__PUNCTUATION])
 
     def tokenize(self, input):
         return nltk.word_tokenize(input.lower())
+    
+    def extract_hashtags(self, text):
+        tokens = re.findall(self.__hashtag_pattern, text)
+        found_hashtags = filter(lambda token: len(token) > 0 and token[0]=='#', tokens)
+        found_hashtags = list(map(lambda tag: tag.lstrip('#').lower(), found_hashtags))
+        return found_hashtags
+
 
     def clean_text(self, input):
         tokens = re.split('\\s+', input.lower())
         tokens = filter(self.is_not_url, tokens)
+        tokens = filter(self.is_not_annotation, tokens)
         tokens = filter(self.is_not_stopword, tokens)
         tokens = map(self.remove_punctuation, tokens)
+        tokens = map(str.strip, tokens)             # strip every token
+        tokens = filter(lambda x: len(x)>0, tokens) # filter out empty tokens
         tokens = filter(self.is_not_number, tokens)
         tokens = map(self.__LEMM.lemmatize, tokens)
         return ' '.join(tokens)
@@ -128,12 +160,13 @@ class TextStatsTransformer(BaseEstimator, TransformerMixin):
 def test1():
     df = pd.read_csv('./disaster-tweets/train.csv', index_col='id').sample(n=20)
     print(df.head())
-    t = TextStatsTransformer(url_stats_file='./disaster-tweets/url_stats.csv')
+    t = TextStatsTransformer(url_stats_file='./disaster-tweets/url_stats.csv', hashtags_sentiment_file='./disaster-tweets/hashtags_sentiment.csv')
     print('Input shape', df.shape)
     df_out = t.fit_transform(df)
     print('Output shape', df_out.shape)
     print(len(t.get_feature_names_out()), t.get_feature_names_out())
-    print(df_out[['text', 'urls_count', 'url_domains', 'url_redirects_count']])
+    # print(df_out[['text', 'urls_count', 'url_domains', 'url_redirects_count']])
+    print(df_out[['text', 'tags_count', 'clean_text', 'hashtags_sentiment']])
 
 
 if __name__ == '__main__':
