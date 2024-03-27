@@ -16,7 +16,10 @@ class TextStatsTransformer(BaseEstimator, TransformerMixin):
         self.__STOP_WORDS = set(nltk.corpus.stopwords.words('english'))
         self.__LEMM = nltk.WordNetLemmatizer()
         self.__features_out = []
-        self.__hashtag_pattern = re.compile('#\w+')
+        self.__hashtag_pattern = r'#\w+'
+        self.__url_pattern = r'https?://.+/\w+'
+        self.__annotation_pattern = r'@\w+'
+        self.__double_nonalphanumeric = r'(\W)\1+'
         pass
 
     def fit(self, X, y=None):
@@ -24,6 +27,7 @@ class TextStatsTransformer(BaseEstimator, TransformerMixin):
 
     def transform(self, X):        
         v_clean_text = list()
+        v_text_content = list()
         v_text_length = list()
         v_upper_text_factor = list()
         v_tags_count = list()
@@ -44,7 +48,7 @@ class TextStatsTransformer(BaseEstimator, TransformerMixin):
         df_hashtags = pd.read_csv(self.hashtags_sentiment_file, index_col='hashtag')
 
         for _, row in X.iterrows():
-            text = row['text']
+            text = row['text']            
             clean_text = self.clean_text(text)
             tokens = re.split('\\s+', text)
             text_length = len(text) - text.count(' ')
@@ -85,6 +89,7 @@ class TextStatsTransformer(BaseEstimator, TransformerMixin):
             v_hashtags_sentiment.append(sentiment)
 
             v_clean_text.append(clean_text)
+            v_text_content.append(self.text_content(text))
             v_text_length.append(text_length)
             v_upper_text_factor.append(upper_text_factor)
             v_tags_count.append(tags_count)
@@ -99,6 +104,7 @@ class TextStatsTransformer(BaseEstimator, TransformerMixin):
 
         X_transformed = X.copy()
         X_transformed['clean_text'] = v_clean_text
+        X_transformed['text_content'] = v_text_content
         X_transformed['text_length'] = v_text_length
         X_transformed['upper_text_factor'] = v_upper_text_factor
         X_transformed['tags_count'] = v_tags_count
@@ -142,7 +148,15 @@ class TextStatsTransformer(BaseEstimator, TransformerMixin):
         found_hashtags = filter(lambda token: len(token) > 0 and token[0]=='#', tokens)
         found_hashtags = list(map(lambda tag: tag.lstrip('#').lower(), found_hashtags))
         return found_hashtags
-
+    
+    def remove_urls(self, text):
+        return re.sub(self.__url_pattern, '', text)
+    
+    def remove_annotations(self, text):
+        return re.sub(self.__annotation_pattern, '', text)
+    
+    def remove_doubles(self, text):
+        return re.sub(self.__double_nonalphanumeric, r"\1", text)
 
     def clean_text(self, input):
         tokens = re.split('\\s+', input.lower())
@@ -155,6 +169,12 @@ class TextStatsTransformer(BaseEstimator, TransformerMixin):
         tokens = filter(self.is_not_number, tokens)
         tokens = map(self.__LEMM.lemmatize, tokens)
         return ' '.join(tokens)
+    
+    def text_content(self, input):
+        output = self.remove_urls(input)
+        output = self.remove_annotations(output)
+        output = self.remove_doubles(output)
+        return output.strip()
 
 
 def test1():
@@ -169,5 +189,30 @@ def test1():
     print(df_out[['text', 'tags_count', 'clean_text', 'hashtags_sentiment']])
 
 
+def test2():
+    text2 = """10777,wreckage,,Wreckage 'Conclusively Confirmed' as From MH370: Malaysia PM: Investigators and the families of those who were... http://t.co/yi54XRHQGB,1
+        10779,wreckage,Maharashtra,Wreckage 'Conclusively Confirmed' as From MH370: Malaysia PM: Investigators and the families of those who were... http://t.co/MSsq0sVnBM,1
+        10780,wreckage,Mumbai,Wreckage 'Conclusively Confirmed' as From MH370: Malaysia PM: Investigators and the families of those who were... http://t.co/nn6Y0fD3l0,1
+        10782,wreckage,"New Delhi,India",Wreckage 'Conclusively Confirmed' as From MH370: Malaysia PM: Investigators and the families of those who were... http://t.co/1YIxFG1Hdy,1
+        107"""
+    t = TextStatsTransformer()
+    print(text2, t.remove_urls(text2), sep='\n')
+
+
+def test3():
+    text3 = """RT @SleepJunkies: Sleeping pills double your risk of a car accident"""
+    t = TextStatsTransformer()
+    print(text3, t.remove_annotations(text3), sep='\n')
+
+
+def test4():
+    text4 = """ I'm here, in wood. Sleeping   pills,, double### your    ---> risk of a car accident"""
+    t = TextStatsTransformer()
+    print(text4, t.remove_doubles(text4), sep='\n')
+
+
 if __name__ == '__main__':
-    test1()
+    # test1()
+    test2()
+    test3()
+    test4()
