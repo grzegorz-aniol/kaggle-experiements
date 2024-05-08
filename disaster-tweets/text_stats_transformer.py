@@ -9,9 +9,10 @@ import re
 
 class TextStatsTransformer(BaseEstimator, TransformerMixin):
 
-    def __init__(self, url_stats_file='url_stats.csv', hashtags_sentiment_file='hashtags_sentiment.csv'):
+    def __init__(self, url_stats_file='url_stats.csv', hashtags_sentiment_file='hashtags_sentiment.csv', token_sentiment_file='token-sentiment.csv'):
         self.url_stats_file = url_stats_file
         self.hashtags_sentiment_file = hashtags_sentiment_file
+        self.token_sentiment_file = token_sentiment_file
         self.__PUNCTUATION = set(string.punctuation)
         self.__STOP_WORDS = set(nltk.corpus.stopwords.words('english'))
         self.__LEMM = nltk.WordNetLemmatizer()
@@ -20,6 +21,7 @@ class TextStatsTransformer(BaseEstimator, TransformerMixin):
         self.__url_pattern = r'https?://.+/\w+'
         self.__annotation_pattern = r'@\w+'
         self.__double_nonalphanumeric = r'(\W)\1+'
+        self.__regex_non_printable = re.compile(f'[^{re.escape(string.printable)}]')
         pass
 
     def fit(self, X, y=None):
@@ -40,6 +42,8 @@ class TextStatsTransformer(BaseEstimator, TransformerMixin):
         v_url_domains = list()
         v_url_redirects = list()
         v_hashtags_sentiment = list()
+        v_word_tokens_sentiment = list()
+        v_word_tokens_sentiment_2 = list()
 
         # load URL statistics
         df_url_stats = pd.read_csv(self.url_stats_file, index_col='url')
@@ -47,9 +51,13 @@ class TextStatsTransformer(BaseEstimator, TransformerMixin):
         # load hashtags statistics
         df_hashtags = pd.read_csv(self.hashtags_sentiment_file, index_col='hashtag')
 
+        # load token sentiment scores
+        df_token_sentiment = pd.read_csv(self.token_sentiment_file, index_col='token')
+
         for _, row in X.iterrows():
             text = row['text']            
-            clean_text = self.clean_text(text)
+            word_tokens = self.clean_text(text, lemmatize=False, skip_stop_words=False, return_array=True)
+            clean_text = ' '.join(word_tokens)
             tokens = re.split('\\s+', text)
             text_length = len(text) - text.count(' ')
             upper_text_length = sum(1 for c in text if c.isupper())
@@ -65,6 +73,7 @@ class TextStatsTransformer(BaseEstimator, TransformerMixin):
             clean_tokens_count = tokens_count - stop_words_count - urls_count
             clean_tokens_factor = clean_tokens_count / tokens_count
 
+            # URL domains 
             domains = []
             url_redirects_count = 0            
             for url in all_urls:
@@ -76,6 +85,7 @@ class TextStatsTransformer(BaseEstimator, TransformerMixin):
                     url_redirects_count += redirects
             domains_text = ' '.join(domains)    
 
+            # hastags sentiment
             hashtags = self.extract_hashtags(text)        
             values = []
             weights = []
@@ -87,6 +97,12 @@ class TextStatsTransformer(BaseEstimator, TransformerMixin):
                     weights.append(counts)
             sentiment = np.average(values, weights=weights) if len(values) > 0 else .0
             v_hashtags_sentiment.append(sentiment)
+
+            # word tokens sentiment
+            scores = [df_token_sentiment.loc[token, 'token_sentiment'] for token in word_tokens if token in df_token_sentiment.index]
+            scores_sum = np.sum(scores) or .0
+            v_word_tokens_sentiment.append(scores_sum)
+            v_word_tokens_sentiment_2.append(np.mean(scores) if len(scores) > 0 else .0)
 
             v_clean_text.append(clean_text)
             v_text_content.append(self.text_content(text))
@@ -117,6 +133,8 @@ class TextStatsTransformer(BaseEstimator, TransformerMixin):
         X_transformed['url_domains'] = v_url_domains
         X_transformed['url_redirects_count'] = v_url_redirects
         X_transformed['hashtags_sentiment'] = v_hashtags_sentiment
+        X_transformed['token_sentiment'] = v_word_tokens_sentiment
+        X_transformed['token_sentiment_2'] = v_word_tokens_sentiment_2
 
         self.__features_out = X_transformed.columns
 
@@ -127,7 +145,7 @@ class TextStatsTransformer(BaseEstimator, TransformerMixin):
 
     def is_not_stopword(self, word):
         return word not in self.__STOP_WORDS
-
+    
     def is_not_number(self, token):
         return not token.isdigit()
 
@@ -135,10 +153,13 @@ class TextStatsTransformer(BaseEstimator, TransformerMixin):
         return not vld.url(token)
     
     def is_not_annotation(self, token):
-        return (len(token) == 0) or (token[0] != '@')
+        return (len(token) == 0) or (token[0] != '@')       
 
     def remove_punctuation(self, input):
         return ''.join([c for c in input if c not in self.__PUNCTUATION])
+    
+    def extract_punctuation(self, input):
+        return ''.join([c for c in input if c in self.__PUNCTUATION])
 
     def tokenize(self, input):
         return nltk.word_tokenize(input.lower())
@@ -157,18 +178,28 @@ class TextStatsTransformer(BaseEstimator, TransformerMixin):
     
     def remove_doubles(self, text):
         return re.sub(self.__double_nonalphanumeric, r"\1", text)
+    
+    def remove_non_printables(self, text):
+        return self.__regex_non_printable.sub('', text)
 
-    def clean_text(self, input):
-        tokens = re.split('\\s+', input.lower())
-        tokens = filter(self.is_not_url, tokens)
-        tokens = filter(self.is_not_annotation, tokens)
-        tokens = filter(self.is_not_stopword, tokens)
+    def clean_text(self, input, skip_stop_words=True, lemmatize=True, return_array=False):
+        text = input.lower()
+        text = self.remove_non_printables(text)
+        text = self.remove_urls(text)
+        text = self.remove_annotations(text)        
+        tokens = re.split('\\s+', text.lower())
+        if skip_stop_words:
+            tokens = filter(self.is_not_stopword, tokens)
         tokens = map(self.remove_punctuation, tokens)
         tokens = map(str.strip, tokens)             # strip every token
         tokens = filter(lambda x: len(x)>0, tokens) # filter out empty tokens
         tokens = filter(self.is_not_number, tokens)
-        tokens = map(self.__LEMM.lemmatize, tokens)
-        return ' '.join(tokens)
+        if lemmatize:
+            tokens = map(self.__LEMM.lemmatize, tokens)
+        if return_array:
+            return list(tokens)
+        else:
+            return ' '.join(tokens)
     
     def text_content(self, input):
         output = self.remove_urls(input)
